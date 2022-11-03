@@ -117,7 +117,7 @@ pub mod server {
         socket: UdpSocket,
         /// HashMap of clients using the socket address as the key
         clients: HashMap<SocketAddr, ClientInfo>,
-        // Vector of clients for faster iteration and counting
+        // Vector of clients for convenience
         client_list: Vec<SocketAddr>,
         /// The current sequence/tick number
         sequence: u64,
@@ -191,8 +191,13 @@ pub mod server {
             let (message, _size) = bincode::decode_from_slice(&buffer, BINCODE_CONFIG)
                 .map_err(|e| ReceiveError::DecodeError(e))?;
 
-            // if the server recieves a msg from a new client it adds them to the HashMap TODO: check not at max clients
+            // if the server recieves a msg from a new client
             if !self.clients.contains_key(&sender_addr) {
+                // if at max clients, return error
+                if self.client_list.len() == MAX_CLIENTS {
+                    return Err(ReceiveError::UnknownSender);
+                }
+                // add the new client
                 self.clients.insert(sender_addr, ClientInfo::new());
                 self.client_list.push(sender_addr);
             }
