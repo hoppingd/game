@@ -109,6 +109,7 @@ pub mod server {
     use std::{net::{SocketAddr, UdpSocket}, collections::HashMap};
 
     const NETWORK_TICK_DELAY: u64 = 60;
+    const MAX_CLIENTS: usize = 2; // final goal = 2, strech goal = 4
 
     /// Should be used as a global resource on the server
     struct Server {
@@ -116,6 +117,8 @@ pub mod server {
         socket: UdpSocket,
         /// HashMap of clients using the socket address as the key
         clients: HashMap<SocketAddr, ClientInfo>,
+        // Vector of clients for faster iteration and counting
+        client_list: Vec<SocketAddr>,
         /// The current sequence/tick number
         sequence: u64,
     }
@@ -153,6 +156,7 @@ pub mod server {
             Ok(Server {
                 socket: sock,
                 clients: HashMap::new(),
+                client_list: Vec::with_capacity(MAX_CLIENTS),
                 sequence: 1u64,
             })
         }
@@ -187,9 +191,10 @@ pub mod server {
             let (message, _size) = bincode::decode_from_slice(&buffer, BINCODE_CONFIG)
                 .map_err(|e| ReceiveError::DecodeError(e))?;
 
-            // if the server recieves a msg from a new client it adds them to the HashMap
+            // if the server recieves a msg from a new client it adds them to the HashMap TODO: check not at max clients
             if !self.clients.contains_key(&sender_addr) {
                 self.clients.insert(sender_addr, ClientInfo::new());
+                self.client_list.push(sender_addr);
             }
 
             Ok((self.clients.get_mut(&sender_addr).unwrap(), message))
@@ -229,12 +234,10 @@ pub mod server {
         };
 
         commands.insert_resource(server);
-        info!("created server");
     }
 
     fn destroy_server(mut commands: Commands) {
         commands.remove_resource::<Server>();
-        info!("destroyed server");
     }
 
     /// Server increase tick count
@@ -318,20 +321,21 @@ pub mod server {
         }
 
         // loop over clients
-        for (client_addr, client_info) in &server.clients {
+        for i in 0..server.client_list.len() {
+            let addr = server.client_list[i];
             let message = ServerToClient {
                 header: ServerHeader {
                     sequence: server.sequence,
                 },
-                body: client_info.bodies.clone(),
+                body: server.clients[&addr].bodies.clone(),
             };
 
             // form message via borrow before consuming it
             let success_msg = format!(
                 "server sent message to {:?}: {:?}",
-                client_addr, message
+                addr, message
             );
-            match server.send_message(*client_addr, message) {
+            match server.send_message(addr, message) {
                 Ok(_) => info!("{}", success_msg),
                 Err(e) => error!("server unable to send message: {:?}", e),
             }
@@ -344,11 +348,18 @@ pub mod server {
         if server.sequence % NETWORK_TICK_DELAY != 0 {
             return;
         }
-        // drop clients
-        server.clients.retain(|_, v| v.until_drop >= NETWORK_TICK_DELAY);
-        // loop through active clients
-        for (_, client_info) in &mut server.clients {
-            client_info.until_drop -= NETWORK_TICK_DELAY;
+        // loop over all clients
+        for i in 0..server.client_list.len() {
+            let addr = server.client_list[i];
+            if (server.clients[&addr].until_drop < NETWORK_TICK_DELAY) {
+                // drop the client
+                warn!("dropping client!");
+                server.clients.remove(&addr);
+                server.client_list.remove(i);
+            }
+            else {
+                server.clients.get_mut(&addr).unwrap().until_drop -= NETWORK_TICK_DELAY;
+            }
         }
     }
 }
@@ -461,12 +472,10 @@ pub mod client {
             Err(e) => panic!("Unable to create client: {}", e),
         };
         commands.insert_resource(client);
-        info!("created client");
     }
 
     fn destroy_client(mut commands: Commands) {
         commands.remove_resource::<Client>();
-        info!("destroyed client");
     }
 
     fn increase_tick(mut client: ResMut<Client>) {
