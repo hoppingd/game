@@ -262,6 +262,9 @@ pub mod server {
                     // break whenever we run out of messages
                     break;
                 }
+                Err(ReceiveError::UnknownSender) => {
+                    warn!("server recieve error: server is full!");
+                }
                 Err(e) => {
                     // anything else is a "real" error that we should complain about
                     error!("server receive error: {:?}", e);
